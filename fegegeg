@@ -1,1 +1,222 @@
-aaaa
+import json
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+import os
+
+rootPath = os.path.split(os.path.realpath(__file__))[0]
+
+m5closesplitlst = [-0.239404, -0.143151, -0.088263, -0.049894, -0.016723, 0.016771, 0.049917, 0.087577, 0.141793,
+                   0.238064]
+m5highsplitlst = [0.008427, 0.024647, 0.041572, 0.058913, 0.079728, 0.104721, 0.134625, 0.176049, 0.230181, 0.331378]
+m5lowsplitlst = [-0.336661, -0.233636, -0.176907, -0.136564, -0.106138, -0.082196, -0.059358, -0.042112, -0.024934,
+                 -0.008429]
+
+m15closesplitlst = [-0.461867, -0.27306, -0.166025, -0.090112, -0.027326, 0.027239, 0.090586, 0.16736, 0.273945,
+                    0.458351]
+m15highsplitlst = [0.017321, 0.045919, 0.08175, 0.117732, 0.159516, 0.206862, 0.266185, 0.343183, 0.454791, 0.667356]
+m15lowsplitlst = [-0.680368, -0.467305, -0.351862, -0.273098, -0.213296, -0.164286, -0.123714, -0.08863, -0.053789,
+                  -0.024531]
+
+
+class RNN_MODEL(torch.nn.Module):
+    def __init__(self, n_hidden, n_out, n_x_linear, *n_x_rnn):
+        super().__init__()
+
+        self.n = len(n_x_rnn)
+
+        if self.n >= 1:
+            self.lstm_layers0 = torch.nn.RNN(input_size=n_x_rnn[0], hidden_size=64, num_layers=1, batch_first=True,
+                                             bidirectional=False)
+        if self.n >= 2:
+            self.lstm_layers1 = torch.nn.RNN(input_size=n_x_rnn[1], hidden_size=64, num_layers=1, batch_first=True,
+                                             bidirectional=False)
+        if self.n >= 3:
+            self.lstm_layers2 = torch.nn.RNN(input_size=n_x_rnn[2], hidden_size=64, num_layers=1, batch_first=True,
+                                             bidirectional=False)
+        if self.n >= 4:
+            self.lstm_layers3 = torch.nn.RNN(input_size=n_x_rnn[3], hidden_size=64, num_layers=1, batch_first=True,
+                                             bidirectional=False)
+        if self.n >= 5:
+            self.lstm_layers4 = torch.nn.RNN(input_size=n_x_rnn[4], hidden_size=64, num_layers=1, batch_first=True,
+                                             bidirectional=False)
+
+        self.linear_layer_hidden0 = torch.nn.Linear(n_x_linear, n_hidden)
+        self.linear_layer_out = nn.Sequential(
+            nn.Linear(n_hidden * self.n + n_hidden, n_hidden),
+            nn.ELU(),
+            nn.Linear(n_hidden, n_hidden),
+            nn.Softplus(),
+            nn.Linear(n_hidden, n_out)
+        )
+
+    def forward(self, x_linear, *x_rnn):
+        x = []
+
+        if self.n >= 1:
+            xi, _ = self.lstm_layers0(x_rnn[0], None)
+            xi = xi[:, -1, :]
+            x.append(xi)
+        if self.n >= 2:
+            xi, _ = self.lstm_layers1(x_rnn[1], None)
+            xi = xi[:, -1, :]
+            x.append(xi)
+        if self.n >= 3:
+            xi, _ = self.lstm_layers2(x_rnn[2], None)
+            xi = xi[:, -1, :]
+            x.append(xi)
+        if self.n >= 4:
+            xi, _ = self.lstm_layers3(x_rnn[3], None)
+            xi = xi[:, -1, :]
+            x.append(xi)
+        if self.n >= 5:
+            xi, _ = self.lstm_layers4(x_rnn[4], None)
+            xi = xi[:, -1, :]
+            x.append(xi)
+
+        x_linear = self.linear_layer_hidden0(x_linear)
+        x.append(x_linear)
+        x = torch.cat(x, dim=1)
+        x = F.softplus(x)
+        x = self.linear_layer_out(x)
+        x = F.softmax(x, dim=1)
+        return x
+
+
+def pred_RNN(Model, *data):
+    model = Model(64, 3, *(v.shape[-1] for v in data))
+    model.load_state_dict(torch.load(rootPath + '/models/A_test_.pth')['model'])
+    model.eval()
+    pred = model(*data)
+    pred_list2 = pred.detach().numpy().tolist()
+    return pred_list2
+
+
+def vtolst(v, lst):
+    """
+    print(vtolst(1.1, [1, 2]))
+    ret: [1, 1, 0]
+    """
+    t1 = [0] * (len(lst) + 1)
+    for i in range(len(lst)):
+        t1[i] = 1
+        if v < lst[i]:
+            break
+        else:
+            if i == len(lst) - 1:
+                t1[i + 1] = 1
+    return t1
+
+
+def comp_shape(seq, loc=4, _t=0.1):
+    uiti_color = 1 if seq['close'][loc] > seq['close'][loc - 1] else 0
+    higS = seq['close'][loc - 1] if seq['close'][loc - 1] > seq['high'][loc] else seq['high'][loc]
+    lowS = seq['close'][loc - 1] if seq['close'][loc - 1] < seq['low'][loc] else seq['low'][loc]
+    amp_len = higS - lowS
+    amp_lenP = amp_len * 1000 / (seq['close'][loc - 1] + 0.000001)
+    uiti_len = abs(seq['close'][loc] - seq['close'][loc - 1])
+    ynxm1_len = higS - seq['close'][loc] if seq['close'][loc] > seq['close'][loc - 1] else higS - seq['close'][loc - 1]
+    ynxm0_len = seq['close'][loc - 1] - lowS if seq['close'][loc] > seq['close'][loc - 1] else seq['close'][loc] - lowS
+
+    shape = [1, 1, 1, 1, 1] if amp_lenP >= _t and uiti_color == 1 and uiti_len >= amp_len * 0.85 \
+        else [1, 0, 1, 1, 1] if amp_lenP >= _t and uiti_color == 1 and amp_len * 0.5 <= uiti_len < amp_len * 0.85 \
+        else [1, 0, 1, 1,
+              0] if amp_lenP >= _t and uiti_color == 1 and uiti_len <= amp_len * 0.5 and ynxm1_len <= amp_len * 0.1 \
+        else [1, 0, 0, 1,
+              1] if amp_lenP >= _t and uiti_color == 1 and uiti_len <= amp_len * 0.5 and ynxm0_len <= amp_len * 0.1 \
+        else [1, 0, 0, 1, 0] if amp_lenP >= _t and uiti_color == 1 and uiti_len <= amp_len * 0.5 \
+        else [0, 1, 1, 1, 1] if amp_lenP >= _t and uiti_color == 0 and uiti_len >= amp_len * 0.85 \
+        else [0, 0, 1, 1, 1] if amp_lenP >= _t and uiti_color == 0 and amp_len * 0.5 <= uiti_len < amp_len * 0.85 \
+        else [0, 0, 1, 1,
+              0] if amp_lenP >= _t and uiti_color == 0 and uiti_len <= amp_len * 0.5 and ynxm1_len <= amp_len * 0.1 \
+        else [0, 0, 0, 1,
+              1] if amp_lenP >= _t and uiti_color == 0 and uiti_len <= amp_len * 0.5 and ynxm0_len <= amp_len * 0.1 \
+        else [0, 0, 0, 1, 0] if amp_lenP >= _t and uiti_color == 0 and uiti_len <= amp_len * 0.5 \
+        else [1, 1, 1, 0.5, 1] if _t / 2 <= amp_lenP < _t and uiti_color == 1 and uiti_len >= amp_len * 0.85 \
+        else [1, 0, 1, 0.5,
+              1] if _t / 2 <= amp_lenP < _t and uiti_color == 1 and amp_len * 0.5 <= uiti_len < amp_len * 0.85 \
+        else [1, 0, 1, 0.5,
+              0] if _t / 2 <= amp_lenP < _t and uiti_color == 1 and uiti_len <= amp_len * 0.5 and ynxm1_len <= amp_len * 0.1 \
+        else [1, 0, 0, 0.5,
+              1] if _t / 2 <= amp_lenP < _t and uiti_color == 1 and uiti_len <= amp_len * 0.5 and ynxm0_len <= amp_len * 0.1 \
+        else [1, 0, 0, 0.5, 0] if _t / 2 <= amp_lenP < _t and uiti_color == 1 and uiti_len <= amp_len * 0.5 \
+        else [0, 1, 1, 0.5, 1] if _t / 2 <= amp_lenP < _t and uiti_color == 0 and uiti_len >= amp_len * 0.85 \
+        else [0, 0, 1, 0.5,
+              1] if _t / 2 <= amp_lenP < _t and uiti_color == 0 and amp_len * 0.5 <= uiti_len < amp_len * 0.85 \
+        else [0, 0, 1, 0.5,
+              0] if _t / 2 <= amp_lenP < _t and uiti_color == 0 and uiti_len <= amp_len * 0.5 and ynxm1_len <= amp_len * 0.1 \
+        else [0, 0, 0, 0.5,
+              1] if _t / 2 <= amp_lenP < _t and uiti_color == 0 and uiti_len <= amp_len * 0.5 and ynxm0_len <= amp_len * 0.1 \
+        else [0, 0, 0, 0.5, 0] if _t / 2 <= amp_lenP < _t and uiti_color == 0 and uiti_len <= amp_len * 0.5 \
+        else [1, 1, 1, 0, 1] if amp_lenP < _t / 2 and uiti_color == 1 and uiti_len >= amp_len * 0.85 \
+        else [1, 0, 1, 0, 1] if amp_lenP < _t / 2 and uiti_color == 1 and amp_len * 0.5 <= uiti_len < amp_len * 0.85 \
+        else [1, 0, 1, 0,
+              0] if amp_lenP < _t / 2 and uiti_color == 1 and uiti_len <= amp_len * 0.5 and ynxm1_len <= amp_len * 0.1 \
+        else [1, 0, 0, 0,
+              1] if amp_lenP < _t / 2 and uiti_color == 1 and uiti_len <= amp_len * 0.5 and ynxm0_len <= amp_len * 0.1 \
+        else [1, 0, 0, 0, 0] if amp_lenP < _t / 2 and uiti_color == 1 and uiti_len <= amp_len * 0.5 \
+        else [0, 1, 1, 0, 1] if amp_lenP < _t / 2 and uiti_color == 0 and uiti_len >= amp_len * 0.85 \
+        else [0, 0, 1, 0, 1] if amp_lenP < _t / 2 and uiti_color == 0 and amp_len * 0.5 <= uiti_len < amp_len * 0.85 \
+        else [0, 0, 1, 0,
+              0] if amp_lenP < _t / 2 and uiti_color == 0 and uiti_len <= amp_len * 0.5 and ynxm1_len <= amp_len * 0.1 \
+        else [0, 0, 0, 0,
+              1] if amp_lenP < _t / 2 and uiti_color == 0 and uiti_len <= amp_len * 0.5 and ynxm0_len <= amp_len * 0.1 \
+        else [0, 0, 0, 0, 0] if amp_lenP < _t / 2 and uiti_color == 0 and uiti_len <= amp_len * 0.5 \
+        else np.nan
+    return shape
+
+
+def comp_percent(seq, item='close', loc=4):
+    if seq[item][loc] <= 0 or seq[item][loc - 1] <= 0:
+        raise Exception(
+            'seq[{}][{}] == {}, seq[{}][{}] == {}'.format(item, loc, seq[item][loc], item, loc - 1, seq[item][loc - 1]))
+    if item == 'close':
+        return (seq['close'][loc] - seq['close'][loc - 1]) * 1000 / seq['close'][loc - 1]
+    elif item == 'high':
+        higS = seq['close'][loc - 1] if seq['close'][loc - 1] > seq['high'][loc] else seq['high'][loc]
+        return (higS - seq['close'][loc - 1]) * 1000 / seq['close'][loc - 1]
+    elif item == 'low':
+        lowS = seq['close'][loc - 1] if seq['close'][loc - 1] < seq['low'][loc] else seq['low'][loc]
+        return (lowS - seq['close'][loc - 1]) * 1000 / seq['close'][loc - 1]
+    elif item == 'volume':
+        return seq['volume'][loc] / (seq['close'][loc] + seq['close'][loc - 1])
+
+
+def comp_rnn(test_data, clst, hlst, llst):
+    return [vtolst(comp_percent(test_data, item='close', loc=i + 1), clst)
+            + vtolst(comp_percent(test_data, item='high', loc=i + 1), hlst)
+            + vtolst(comp_percent(test_data, item='low', loc=i + 1), llst)
+            + comp_shape(test_data, loc=i + 1, _t=0.3)
+            for i in range(4)]
+
+
+def extract_data(data):
+    if len(data['close']) != 126 or len(data['close']) != 126 or len(data['close']) != 126:
+        raise Exception('len_data != 126')
+    data = {'close': data['close'][:-1], 'high': data['high'][:-1], 'low': data['low'][:-1]}
+
+    data_t1 = {'close': [data['close'][i * 5 - 1] for i in range(len(data['close']) // 5)],
+               'high': [np.max(data['high'][i * 5:(i + 1) * 5]) for i in range(len(data['high']) // 5)],
+               'low': [np.min(data['low'][i * 5:(i + 1) * 5]) for i in range(len(data['low']) // 5)]}
+
+    data_t2 = {'close': [data_t1['close'][i * 5 - 1] for i in range(len(data_t1['close']) // 5)],
+               'high': [np.max(data_t1['high'][i * 5:(i + 1) * 5]) for i in range(len(data_t1['high']) // 5)],
+               'low': [np.min(data_t1['low'][i * 5:(i + 1) * 5]) for i in range(len(data_t1['low']) // 5)]}
+    m5_data = {'close': data_t1['close'][-5:], 'high': data_t1['high'][-5:], 'low': data_t1['low'][-5:]}
+    m15_data = {'close': data_t2['close'][-5:], 'high': data_t2['high'][-5:], 'low': data_t2['low'][-5:]}
+    return {'m5_data': m5_data, 'm15_data': m15_data}
+
+
+def pred_ontime(recv_data):
+    if str == type(recv_data):
+        recv_data = json.loads(recv_data.replace(', ]', ']'))
+    test_data = extract_data(recv_data)
+    data_x_m5 = comp_rnn(test_data['m5_data'], m5closesplitlst, m5highsplitlst, m5lowsplitlst)
+    data_x_m15 = comp_rnn(test_data['m15_data'], m15closesplitlst, m15highsplitlst, m15lowsplitlst)
+    data_x = [[data_x_m5[-1] + data_x_m15[-1]], [data_x_m5], [data_x_m15]]
+    data_x = [torch.tensor(x, dtype=torch.float32) for x in data_x]
+
+    return pred_RNN(RNN_MODEL, *data_x)
